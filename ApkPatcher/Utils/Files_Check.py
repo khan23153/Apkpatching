@@ -137,7 +137,7 @@ class FileCheck:
                 (
                     "https://github.com/TechnoIndian/Tools/releases/download/Tools/ApkSig.jar",
                     self.ApkSig,
-                    "ac8a3dc7a9fa516408a320e68f57e13416887827e6d58c086009e9374b771e55"
+                    "f91862c60910f2d85b950c1bee8e0f48494e29202f70b87a957e05314caa616d"
                 ),
                 (
                     "https://raw.githubusercontent.com/TechnoIndian/Objectlogger/refs/heads/main/AES.smali",
