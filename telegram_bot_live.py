@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run the ApkPatcher Telegram bot with detailed live patch output.
 
-This module reuses telegram_bot.py and only replaces its patch-job renderer.
-The ApkPatcher engine and patching behavior are unchanged, except that the VPS
-wrapper can automatically retry an APKTool compatibility failure with the
-upstream APKEditor mode (-a).
+This module reuses telegram_bot.py and replaces its patch-job renderer. On the
+VPS, Flutter jobs prefer the upstream APKEditor mode (-a), because modern
+Flutter APKs can spend a long time in APKTool and then fail during rebuild.
+APKTool compatibility failures in other jobs can still retry with APKEditor.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from telegram.constants import ParseMode
 
 LIVE_LINES = max(5, min(20, int(os.environ.get("APKPATCHER_LIVE_LINES", "12"))))
 LIVE_EDIT_INTERVAL = max(0.8, float(os.environ.get("APKPATCHER_LIVE_EDIT_INTERVAL", "1.5")))
+HEARTBEAT_INTERVAL = max(10.0, float(os.environ.get("APKPATCHER_HEARTBEAT_INTERVAL", "15")))
 
 SMALI_RE = re.compile(r"([^/\\\s]+\.smali)\b", re.I)
 PATTERN_COUNT_RE = re.compile(r"Pattern Applied.*?(\d+)\s*Time", re.I)
@@ -42,7 +43,6 @@ def _display_event(line: str) -> str | None:
 
     low = clean.lower()
 
-    # Ignore decorative terminal output and very noisy regex dumps.
     if set(clean) <= {"_", "-", "=", "|", " "}:
         return None
     if "[ pattern ]" in low and "\\.method" in low:
@@ -94,7 +94,6 @@ def _display_event(line: str) -> str | None:
     if "final apk" in low:
         return "🎉 Patched APK created"
 
-    # Keep useful status lines emitted by the patcher, but skip huge raw regex text.
     useful = (
         "[ updated ]", "[ certificate ]", "[ write ", "[ patch", "scanning",
         "patching", "manifest", "successful", "created", "inject", "hook",
@@ -136,7 +135,6 @@ def _render(session, percent: int, stage: str, events, stats: dict[str, int]) ->
 
 
 def _should_retry_with_apkeditor(command: list[str], lines: list[str]) -> bool:
-    """Return True only for upstream APKTool compatibility failures."""
     if "-a" in command:
         return False
     text = "\n".join(lines[-30:]).lower()
@@ -144,15 +142,13 @@ def _should_retry_with_apkeditor(command: list[str], lines: list[str]) -> bool:
 
 
 def _cleanup_retry_artifacts(session) -> None:
-    """Remove only artifacts belonging to this job before a clean -a retry."""
+    """Remove only artifacts belonging to this job before a clean attempt."""
     stem = session.input_path.stem
     home = Path.home().resolve()
 
     decompile_dir = (home / f"{stem}_decompiled").resolve()
     sig_dir = (home / f"{stem}_SigBlock").resolve()
 
-    # Both paths are generated from the bot's sanitized, job-unique APK name.
-    # Still enforce that they remain direct children of the service user's home.
     for directory in (decompile_dir, sig_dir):
         if directory.parent == home and directory.exists():
             shutil.rmtree(directory, ignore_errors=True)
@@ -167,10 +163,17 @@ def _cleanup_retry_artifacts(session) -> None:
 
 def _patch_env() -> dict[str, str]:
     env = os.environ.copy()
-    # Upstream calls `clear`; systemd normally has no TERM value.
     env.setdefault("TERM", "xterm")
     env.setdefault("HOME", str(Path.home()))
     return env
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
 
 
 async def run_patch_job_live(user_id: int, menu_message, context) -> None:
@@ -184,10 +187,23 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
         await menu_message.reply_text(f"⚠️ {exc}")
         return
 
+    # Flutter APKs have already shown poor APKTool rebuild compatibility on
+    # this VPS. Start directly with the upstream APKEditor path instead of
+    # spending many minutes on a likely-to-fail APKTool attempt.
+    prefer_apkeditor = "flutter" in session.selected and "-a" not in command
+    if prefer_apkeditor:
+        command = [*command, "-a"]
+
     session.running = True
     events: deque[str] = deque(maxlen=LIVE_LINES)
     stats = {"smali": 0, "patterns": 0, "manifest": 0, "certificates": 0, "signed": 0}
-    percent, stage = 0, "Waiting for patch worker…"
+
+    if prefer_apkeditor:
+        events.append("⚙️ Flutter job: using APKEditor compatibility mode from start")
+        percent, stage = 5, "Starting APKEditor compatibility mode…"
+    else:
+        percent, stage = 0, "Waiting for patch worker…"
+
     progress = await menu_message.reply_text(
         _render(session, percent, stage, events, stats), parse_mode=ParseMode.HTML
     )
@@ -216,6 +232,10 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
         """Run one patcher attempt and stream its output into the same UI."""
         nonlocal percent, stage, dirty
 
+        started_at = time.monotonic()
+        last_output_at = started_at
+        last_real_stage = stage
+
         proc = await asyncio.create_subprocess_exec(
             *attempt_command,
             cwd=str(session.workdir),
@@ -225,7 +245,7 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
         )
 
         async def consume() -> None:
-            nonlocal percent, stage, dirty
+            nonlocal percent, stage, dirty, last_output_at, last_real_stage
             assert proc.stdout is not None
             while True:
                 raw = await proc.stdout.readline()
@@ -234,6 +254,8 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
                 line = bot._clean_output(raw.decode("utf-8", errors="replace"))
                 if not line:
                     continue
+
+                last_output_at = time.monotonic()
                 bot.LOG.info("patch[%s] %s", user_id, line)
                 log_tail.append(line)
                 del log_tail[:-30]
@@ -241,6 +263,7 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
                 parsed_stage = bot._stage_from_line(line)
                 if parsed_stage:
                     percent, stage = parsed_stage
+                    last_real_stage = stage
                     dirty = True
 
                 _update_stats(stats, line)
@@ -252,9 +275,22 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
                 await refresh()
 
         async def heartbeat() -> None:
+            nonlocal stage, dirty
             while proc.returncode is None:
-                await asyncio.sleep(LIVE_EDIT_INTERVAL)
-                await refresh()
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if proc.returncode is not None:
+                    break
+
+                now = time.monotonic()
+                silence = now - last_output_at
+                elapsed = now - started_at
+                stage = (
+                    f"{last_real_stage} — still working "
+                    f"({_format_duration(elapsed)} elapsed; "
+                    f"{_format_duration(silence)} since last output)"
+                )
+                dirty = True
+                await refresh(force=True)
 
         try:
             await asyncio.wait_for(
@@ -271,6 +307,9 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
 
     try:
         async with bot.PATCH_SEMAPHORE:
+            # Clean stale output from an interrupted/failed previous attempt of
+            # this same job before starting the selected engine.
+            await asyncio.to_thread(_cleanup_retry_artifacts, session)
             returncode = await run_attempt(command)
 
             if returncode != 0 and _should_retry_with_apkeditor(command, log_tail):
@@ -281,8 +320,6 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
 
                 await asyncio.to_thread(_cleanup_retry_artifacts, session)
 
-                # Reset first-attempt UI counters: the retry starts again from
-                # the untouched original APK, not from the failed decompile tree.
                 stats.update(smali=0, patterns=0, manifest=0, certificates=0, signed=0)
                 events.clear()
                 events.append("↻ APKTool failed; switching automatically to APKEditor")
@@ -352,8 +389,6 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
 
 
 def main() -> None:
-    # Callback handlers in telegram_bot resolve this global at execution time,
-    # so replacing it here upgrades the UI without modifying the core bot file.
     bot.run_patch_job = run_patch_job_live
     bot.main()
 
