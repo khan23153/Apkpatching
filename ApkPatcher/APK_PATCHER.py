@@ -237,5 +237,9 @@ def RK_Techno_IND():
 
     if M.os.name == 'posix':
         M.subprocess.run(['termux-wake-unlock'])
-        exit(f"\n{C.X}{C.C} Releasing Wake Lock...\n")
-    exit(0)
+        print(f"\n{C.X}{C.C} Releasing Wake Lock...\n")
+
+    # Returning 0 lets the console-script wrapper exit successfully. The old
+    # code used exit("Releasing Wake Lock..."), which prints the message but
+    # exits with status 1 and made successful Telegram jobs look failed.
+    return 0
