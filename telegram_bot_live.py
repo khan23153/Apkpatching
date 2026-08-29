@@ -2,7 +2,9 @@
 """Run the ApkPatcher Telegram bot with detailed live patch output.
 
 This module reuses telegram_bot.py and only replaces its patch-job renderer.
-The ApkPatcher engine and patching behavior are unchanged.
+The ApkPatcher engine and patching behavior are unchanged, except that the VPS
+wrapper can automatically retry an APKTool compatibility failure with the
+upstream APKEditor mode (-a).
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import asyncio
 import html
 import os
 import re
+import shutil
 import time
 from collections import deque
 from pathlib import Path
@@ -24,6 +27,11 @@ LIVE_EDIT_INTERVAL = max(0.8, float(os.environ.get("APKPATCHER_LIVE_EDIT_INTERVA
 
 SMALI_RE = re.compile(r"([^/\\\s]+\.smali)\b", re.I)
 PATTERN_COUNT_RE = re.compile(r"Pattern Applied.*?(\d+)\s*Time", re.I)
+APKEDITOR_RETRY_MARKERS = (
+    "failed with apktool",
+    "try with apkeditor",
+    "flag -a",
+)
 
 
 def _display_event(line: str) -> str | None:
@@ -127,6 +135,44 @@ def _render(session, percent: int, stage: str, events, stats: dict[str, int]) ->
     )
 
 
+def _should_retry_with_apkeditor(command: list[str], lines: list[str]) -> bool:
+    """Return True only for upstream APKTool compatibility failures."""
+    if "-a" in command:
+        return False
+    text = "\n".join(lines[-30:]).lower()
+    return any(marker in text for marker in APKEDITOR_RETRY_MARKERS)
+
+
+def _cleanup_retry_artifacts(session) -> None:
+    """Remove only artifacts belonging to this job before a clean -a retry."""
+    stem = session.input_path.stem
+    home = Path.home().resolve()
+
+    decompile_dir = (home / f"{stem}_decompiled").resolve()
+    sig_dir = (home / f"{stem}_SigBlock").resolve()
+
+    # Both paths are generated from the bot's sanitized, job-unique APK name.
+    # Still enforce that they remain direct children of the service user's home.
+    for directory in (decompile_dir, sig_dir):
+        if directory.parent == home and directory.exists():
+            shutil.rmtree(directory, ignore_errors=True)
+
+    for suffix in ("_Patched.apk", "_Patch.apk"):
+        output = session.input_path.with_name(f"{stem}{suffix}")
+        try:
+            output.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _patch_env() -> dict[str, str]:
+    env = os.environ.copy()
+    # Upstream calls `clear`; systemd normally has no TERM value.
+    env.setdefault("TERM", "xterm")
+    env.setdefault("HOME", str(Path.home()))
+    return env
+
+
 async def run_patch_job_live(user_id: int, menu_message, context) -> None:
     session = bot.SESSIONS.get(user_id)
     if not session or session.running:
@@ -166,62 +212,92 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
         except Exception:
             bot.LOG.debug("Live Telegram progress update failed", exc_info=True)
 
+    async def run_attempt(attempt_command: list[str]) -> int:
+        """Run one patcher attempt and stream its output into the same UI."""
+        nonlocal percent, stage, dirty
+
+        proc = await asyncio.create_subprocess_exec(
+            *attempt_command,
+            cwd=str(session.workdir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_patch_env(),
+        )
+
+        async def consume() -> None:
+            nonlocal percent, stage, dirty
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = bot._clean_output(raw.decode("utf-8", errors="replace"))
+                if not line:
+                    continue
+                bot.LOG.info("patch[%s] %s", user_id, line)
+                log_tail.append(line)
+                del log_tail[:-30]
+
+                parsed_stage = bot._stage_from_line(line)
+                if parsed_stage:
+                    percent, stage = parsed_stage
+                    dirty = True
+
+                _update_stats(stats, line)
+                event = _display_event(line)
+                if event and (not events or events[-1] != event):
+                    events.append(event)
+                    dirty = True
+
+                await refresh()
+
+        async def heartbeat() -> None:
+            while proc.returncode is None:
+                await asyncio.sleep(LIVE_EDIT_INTERVAL)
+                await refresh()
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(consume(), proc.wait(), heartbeat()),
+                timeout=bot.JOB_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(f"Patch attempt exceeded {bot.JOB_TIMEOUT // 60} minutes")
+
+        await refresh(force=True)
+        return int(proc.returncode or 0)
+
     try:
         async with bot.PATCH_SEMAPHORE:
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=str(session.workdir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=os.environ.copy(),
-            )
+            returncode = await run_attempt(command)
 
-            async def consume() -> None:
-                nonlocal percent, stage, dirty
-                assert proc.stdout is not None
-                while True:
-                    raw = await proc.stdout.readline()
-                    if not raw:
-                        break
-                    line = bot._clean_output(raw.decode("utf-8", errors="replace"))
-                    if not line:
-                        continue
-                    bot.LOG.info("patch[%s] %s", user_id, line)
-                    log_tail.append(line)
-                    del log_tail[:-30]
-
-                    parsed_stage = bot._stage_from_line(line)
-                    if parsed_stage:
-                        percent, stage = parsed_stage
-                        dirty = True
-
-                    _update_stats(stats, line)
-                    event = _display_event(line)
-                    if event and (not events or events[-1] != event):
-                        events.append(event)
-                        dirty = True
-
-                    await refresh()
-
-            async def heartbeat() -> None:
-                while proc.returncode is None:
-                    await asyncio.sleep(LIVE_EDIT_INTERVAL)
-                    await refresh()
-
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(consume(), proc.wait(), heartbeat()),
-                    timeout=bot.JOB_TIMEOUT,
+            if returncode != 0 and _should_retry_with_apkeditor(command, log_tail):
+                bot.LOG.warning(
+                    "patch[%s] APKTool compatibility failure; retrying cleanly with APKEditor",
+                    user_id,
                 )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                raise RuntimeError(f"Patch job exceeded {bot.JOB_TIMEOUT // 60} minutes")
 
-            await refresh(force=True)
-            if proc.returncode != 0:
+                await asyncio.to_thread(_cleanup_retry_artifacts, session)
+
+                # Reset first-attempt UI counters: the retry starts again from
+                # the untouched original APK, not from the failed decompile tree.
+                stats.update(smali=0, patterns=0, manifest=0, certificates=0, signed=0)
+                events.clear()
+                events.append("↻ APKTool failed; switching automatically to APKEditor")
+                log_tail.clear()
+                percent = 5
+                stage = "Retrying with APKEditor compatibility mode…"
+                dirty = True
+                await refresh(force=True)
+
+                command = [*command, "-a"]
+                returncode = await run_attempt(command)
+
+            if returncode != 0:
                 tail = "\n".join(log_tail[-8:])[-3000:]
-                raise RuntimeError(tail or f"apkpatcher exited with code {proc.returncode}")
+                raise RuntimeError(tail or f"apkpatcher exited with code {returncode}")
 
         output = session.input_path.with_name(f"{session.input_path.stem}_Patched.apk")
         if not output.exists():
@@ -251,7 +327,11 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
                     f"Smali: {stats['smali']} • Patterns: {stats['patterns']} • Manifest: {stats['manifest']}"
                 ),
             )
-        await bot._safe_edit(progress, summary.replace("📤 Uploading patched APK…", "✅ Patched APK sent above."), parse_mode=ParseMode.HTML)
+        await bot._safe_edit(
+            progress,
+            summary.replace("📤 Uploading patched APK…", "✅ Patched APK sent above."),
+            parse_mode=ParseMode.HTML,
+        )
 
     except FileNotFoundError:
         await bot._safe_edit(
