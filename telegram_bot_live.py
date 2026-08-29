@@ -49,6 +49,13 @@ def _display_event(line: str) -> str | None:
     if clean.startswith("~$") or "java -jar" in low:
         return None
 
+    if "flutter native analysis" in low:
+        return "🔬 Flutter native library analysis"
+    if "searching for flutter ssl offset" in low:
+        return "🔎 Searching Flutter SSL signature"
+    if "ssl_verify_peer_cert" in low and "patched successfully" in low:
+        return "✅ Flutter SSL function patched"
+
     m = PATTERN_COUNT_RE.search(clean)
     if m:
         return f"✅ Pattern applied × {m.group(1)}"
@@ -164,6 +171,10 @@ def _patch_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("TERM", "xterm")
     env.setdefault("HOME", str(Path.home()))
+    # The patcher is a Python console process whose stdout is piped into this
+    # bot. Disable block buffering so stage messages emitted between Java/r2
+    # subprocesses reach Telegram immediately.
+    env["PYTHONUNBUFFERED"] = "1"
     return env
 
 
@@ -247,11 +258,25 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
                 log_tail.append(line)
                 del log_tail[:-30]
 
-                parsed_stage = bot._stage_from_line(line)
-                if parsed_stage:
-                    percent, stage = parsed_stage
+                low = line.lower()
+                if "flutter native analysis" in low:
+                    percent, stage = 70, "Analyzing Flutter native library…"
                     last_real_stage = stage
                     dirty = True
+                elif "searching for flutter ssl offset" in low:
+                    percent, stage = 73, "Searching Flutter SSL signature…"
+                    last_real_stage = stage
+                    dirty = True
+                elif "ssl_verify_peer_cert" in low and "patched successfully" in low:
+                    percent, stage = 75, "Flutter SSL patch applied"
+                    last_real_stage = stage
+                    dirty = True
+                else:
+                    parsed_stage = bot._stage_from_line(line)
+                    if parsed_stage:
+                        percent, stage = parsed_stage
+                        last_real_stage = stage
+                        dirty = True
 
                 _update_stats(stats, line)
                 event = _display_event(line)
