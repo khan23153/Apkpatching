@@ -38,8 +38,11 @@ def main() -> None:
     if run_patch_job_live is not None:
         bot.run_patch_job = run_patch_job_live
 
-    base_url = os.environ["TELEGRAM_BOT_API_BASE_URL"].rstrip("/") + "/"
-    base_file_url = os.environ["TELEGRAM_BOT_API_FILE_URL"].rstrip("/") + "/"
+    # python-telegram-bot appends the bot token directly to these prefixes.
+    # Keep them ending in '/bot', not '/bot/', otherwise requests become
+    # '/bot/<token>/method' and the local Bot API rejects the token.
+    base_url = os.environ["TELEGRAM_BOT_API_BASE_URL"].rstrip("/")
+    base_file_url = os.environ["TELEGRAM_BOT_API_FILE_URL"].rstrip("/")
 
     bot.logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
