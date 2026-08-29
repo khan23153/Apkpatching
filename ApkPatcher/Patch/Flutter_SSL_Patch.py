@@ -29,18 +29,18 @@ patterns = {
 
 # ---------------- Get r2 Version ----------------
 def get_r2_version():
-
     try:
-        result = M.subprocess.run(["r2", "-V"], capture_output=True, text=True, check=True)
-        results = result.stdout.strip().split()
-
-        for result in results:
-            if result.startswith(("5.", "6.")):
-                result = result.split("-")[0]
-                return result
-
-        return None
-
+        result = M.subprocess.run(
+            ["r2", "-V"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        output = f"{result.stdout}\n{result.stderr}"
+        match = M.re.search(r"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)", output)
+        if not match:
+            return None
+        return ".".join(match.groups())
     except (M.subprocess.CalledProcessError, FileNotFoundError):
         return None
 
@@ -94,17 +94,16 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
 
     print(f"\r{C.X}{C.C} Flutter SSL Patch, Script by {C.OG}🇮🇳 AbhiTheM0dder 🇮🇳\n")
 
+    version_text = get_r2_version()
+    if not version_text:
+        exit(f"\n{C.ERROR} Unable to detect Radare2 version. Verify with: r2 -V\n")
+
     try:
-        r2_version = tuple(map(int, get_r2_version().split(".")))
+        r2_version = tuple(map(int, version_text.split(".")))
         ia_version = tuple(map(int, "5.9.5".split(".")))
-
-        if r2_version <= ia_version:
-            is_iA = True
-        else:
-            is_iA = False
-
-    except Exception as e:
-        exit(f"\n{C.ERROR} {str(e)}\n")
+        is_iA = r2_version <= ia_version
+    except ValueError:
+        exit(f"\n{C.ERROR} Unsupported Radare2 version string: {version_text}\n")
 
     architectures = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64"]
     lib_so_path = None
