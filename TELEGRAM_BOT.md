@@ -8,6 +8,7 @@
 - Select supported patch modes with inline buttons.
 - Run the existing `apkpatcher` CLI in an isolated per-job directory.
 - Show patching progress/status in the chat.
+- Optionally show detailed live patch activity (smali files, pattern counts, manifest/config writes, signing stages).
 - Return the generated `_Patched.apk` to the user.
 - Optionally restrict the bot to specific Telegram user IDs.
 
@@ -48,14 +49,26 @@ export APKPATCHER_ALLOWED_USERS='123456789'
 
 # Optional job directory
 export APKPATCHER_BOT_WORKDIR="$HOME/apkpatcher-bot-jobs"
+
+# Live-mode options
+export APKPATCHER_LIVE_LINES=12
+export APKPATCHER_LIVE_EDIT_INTERVAL=1.5
 ```
 
 Do not commit your BotFather token to GitHub.
 
 ## Run
 
+Standard progress mode:
+
 ```bash
 python telegram_bot.py
+```
+
+Detailed live progress mode:
+
+```bash
+python telegram_bot_live.py
 ```
 
 Then send `/start` to the bot and upload an APK as a Telegram document.
@@ -69,6 +82,7 @@ Then send `/start` to the bot and upload an APK as a Telegram document.
 ## Design notes
 
 - The Telegram layer invokes the existing `apkpatcher` command as a subprocess instead of duplicating patch logic.
+- The live renderer parses the existing CLI output; it does not alter the patch engine.
 - Uploaded APKs use unique job paths so different users do not share the same working filename.
 - Jobs are serialized by default because the existing CLI uses shared runtime resources.
 - Telegram support is an optional dependency, so normal ApkPatcherX installations remain unchanged.
