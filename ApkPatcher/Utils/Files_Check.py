@@ -6,6 +6,24 @@ from importlib.metadata import version
 __version__ = version("ApkPatcherX")
 
 
+# ---------------- Platform Detection ----------------
+def _is_termux():
+    """Return True only inside a real Termux environment.
+
+    Linux servers are also POSIX, so checking os.name alone incorrectly treats
+    Ubuntu/Debian VPS hosts as Termux. Detect the Android/Termux environment
+    explicitly instead.
+    """
+    env = M.os.environ
+    prefix = env.get("PREFIX", "")
+    return bool(
+        env.get("TERMUX_VERSION")
+        or "com.termux" in prefix
+        or prefix.startswith("/data/data/com.termux/")
+        or M.os.path.exists("/data/data/com.termux/files/usr/bin/pkg")
+    )
+
+
 # ---------------- Set Path ----------------
 run_dir = M.os.path.dirname(M.os.path.abspath(M.sys.argv[0]))
 script_dir = M.os.path.dirname(M.os.path.abspath(__file__))
@@ -120,6 +138,18 @@ class FileCheck:
     # ---------------- Files Download Link ----------------
     def F_D(self):
 
+        is_termux = _is_termux()
+        apktool_url = (
+            "https://github.com/TechnoIndian/Tools/releases/download/Tools/APKTool_Termux.jar"
+            if is_termux
+            else "https://github.com/TechnoIndian/Tools/releases/download/Tools/APKTool.jar"
+        )
+        apktool_checksum = (
+            "0ac5be78edd13772b3d8e261548e5b7f7d2579310c078476e12b8c91341ea5dc"
+            if is_termux
+            else "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"
+        )
+
         self.Download_Files(
             [
                 (
@@ -128,11 +158,9 @@ class FileCheck:
                     "a9cd40df818845456be6d696de6110c89edf4b0a0580cb83438ed6b25a366e67"
                 ),
                 (
-                    "https://github.com/TechnoIndian/Tools/releases/download/Tools/APKTool.jar" if M.os.name == 'nt' else "https://github.com/TechnoIndian/Tools/releases/download/Tools/APKTool_Termux.jar",
-
+                    apktool_url,
                     self.APKTool_Path,
-
-                    "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423" if M.os.name == 'nt' else "0ac5be78edd13772b3d8e261548e5b7f7d2579310c078476e12b8c91341ea5dc"
+                    apktool_checksum
                 ),
                 (
                     "https://github.com/TechnoIndian/Tools/releases/download/Tools/ApkSig.jar",
