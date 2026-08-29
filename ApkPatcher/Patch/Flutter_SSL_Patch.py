@@ -63,7 +63,7 @@ def find_offset(r2, patterns, is_iA=False):
     elif arch_value == "x86" and arch_bits == 64:
         arch = "x86"
     else:
-        print(f"\n{C.ERROR} Unsupported architecture: {arch_value}\n")
+        print(f"\n{C.ERROR} Unsupported architecture: {arch_value}\n", flush=True)
         return
 
     if arch in patterns:
@@ -72,17 +72,21 @@ def find_offset(r2, patterns, is_iA=False):
             search_result = search_result.strip().split(" ")[0]
 
             if search_result:
-                print(f"\n{C.X}{C.C} Matched Pattern\n  |\n  ╰┈{idx}➢ {C.PN} {pattern}\n")
+                print(f"\n{C.X}{C.C} Matched Pattern\n  |\n  ╰┈{idx}➢ {C.PN} {pattern}\n", flush=True)
 
                 search_fcn = r2.cmd(f"{search_result};afl.").strip().split(" ")[0]
 
-                print(f"\n{C.X}{C.C} ssl_verify_peer_cert found at: {C.PN}{search_result}\n")
+                print(f"\n{C.X}{C.C} ssl_verify_peer_cert found at: {C.PN}{search_result}\n", flush=True)
 
                 if not search_fcn:
+                    # The byte signatures in this module start at the target
+                    # function prologue. If basic analysis did not register the
+                    # function, define only this matched function instead of
+                    # performing an expensive whole-library call analysis.
                     search_fcn = search_result
                     r2.cmd(f"af @{search_fcn}")
 
-                print(f"\n{C.X}{C.C} function at: {C.PN}{search_fcn}\n")
+                print(f"\n{C.X}{C.C} function at: {C.PN}{search_fcn}\n", flush=True)
 
                 patch_cmd = "wao ret1" if idx == 4 and arch in ("arm64", "x86") else "wao ret0"
 
@@ -92,7 +96,7 @@ def find_offset(r2, patterns, is_iA=False):
 # ---------------- Patch Flutter SSL ----------------
 def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
 
-    print(f"\r{C.X}{C.C} Flutter SSL Patch, Script by {C.OG}🇮🇳 AbhiTheM0dder 🇮🇳\n")
+    print(f"\r{C.X}{C.C} Flutter SSL Patch, Script by {C.OG}🇮🇳 AbhiTheM0dder 🇮🇳\n", flush=True)
 
     version_text = get_r2_version()
     if not version_text:
@@ -117,7 +121,7 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
             break
 
     if lib_so_path:
-        print(f"\n{C.S} Found {C.E} {C.OG}➸❥ {C.Y}{arch}/{M.os.path.basename(lib_so_path)} {C.G} ✔\n")
+        print(f"\n{C.S} Found {C.E} {C.OG}➸❥ {C.Y}{arch}/{M.os.path.basename(lib_so_path)} {C.G} ✔\n", flush=True)
 
         # ---------------- Detect Flutter Dart Version ----------------
         with open(lib_so_path, "rb") as so_file:
@@ -137,7 +141,7 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
             else:
                 version_code = "Unknown"
 
-            print(f"\n{C.S} Flutter Dart Version {C.E} {C.OG}➸❥  {C.PN}{version_code}  {C.G}✔\n")
+            print(f"\n{C.S} Flutter Dart Version {C.E} {C.OG}➸❥  {C.PN}{version_code}  {C.G}✔\n", flush=True)
 
     else:
         exit(f"\n{C.ERROR} libflutter.so not found in any of the specified architectures {architectures}\n")
@@ -153,11 +157,16 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
     else:
         r2 = r2pipe.open(lib_so_path, flags=["-w", "-e", "log.quiet=true"])
 
-    print(f"\n{C.X}{C.G} Analyzing function calls...\n")
+    print(f"\n{C.X}{C.G} Flutter native analysis: basic function analysis...\n", flush=True)
 
-    r2.cmd("aac")
+    # `aac` performs whole-library call analysis and can keep a single CPU core
+    # busy for many minutes on large stripped libflutter.so files. The patcher
+    # only needs enough function metadata to associate a matched prologue with
+    # a function, so basic `aa` analysis is sufficient; find_offset() defines
+    # the matched function directly if it is not already present.
+    r2.cmd("aa")
 
-    print(f"\n{C.X}{C.G} Searching for offset...\n")
+    print(f"\n{C.X}{C.G} Searching for Flutter SSL offset...\n", flush=True)
 
     result = find_offset(r2, patterns, is_iA)
 
@@ -167,11 +176,11 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
         r2.cmd(f"{offset}")
         r2.cmd(patch_cmd)
 
-        print(f"\n{C.X}{C.C} ssl_verify_peer_cert: {C.G}Patched Successfully  ✔\n")
+        print(f"\n{C.X}{C.C} ssl_verify_peer_cert: {C.G}Patched Successfully  ✔\n", flush=True)
 
     else:
-        print(f"\n{C.ERROR} ssl_verify_peer_cert Not Found.  ✘\n")
+        print(f"\n{C.ERROR} ssl_verify_peer_cert Not Found.  ✘\n", flush=True)
 
-    print(f"{C.CC}{'_' * 61}\n\n")
+    print(f"{C.CC}{'_' * 61}\n\n", flush=True)
 
     r2.quit()
