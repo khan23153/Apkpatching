@@ -20,7 +20,8 @@ dependencies = [
   "requests",
   "r2pipe",
   "asn1crypto",
-  "multiprocess"
+  "multiprocess",
+  "python-telegram-bot>=22,<23"
 ]
 
 keywords = ["ApkPatcher"]
