@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Compatibility shim for the upstream Termux-only dependency check.
+# On a VPS dependencies are installed by apt during deployment.
+if [ "$1" = "list-installed" ]; then
+  printf '%s\n' 'openjdk-17' 'aapt2'
+  exit 0
+fi
+printf '%s\n' 'This compatibility shim only supports: pkg list-installed' >&2
+exit 1
