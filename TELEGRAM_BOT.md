@@ -1,107 +1,64 @@
 # APK Patcher Telegram Bot
 
-`telegram_bot.py` is a Telegram UI wrapper around the existing ApkPatcherX CLI. The original patch engine remains unchanged.
+`telegram_bot.py` adds an optional Telegram interface around the existing ApkPatcherX CLI. The patch engine itself is not replaced or modified by this wrapper.
 
-## What the bot does
+## Features
 
-1. User sends an `.apk` document to the Telegram bot.
-2. The bot stores it in an isolated per-job directory.
-3. Inline buttons are shown for the available patch modes.
-4. The selected options are translated to the existing ApkPatcherX CLI flags.
-5. The existing `apkpatcher` command runs as a subprocess.
-6. Progress/status messages are updated in Telegram.
-7. The resulting `_Patched.apk` is sent back to the chat.
+- Upload an `.apk` file through Telegram.
+- Select supported patch modes with inline buttons.
+- Run the existing `apkpatcher` CLI in an isolated per-job directory.
+- Show patching progress/status in the chat.
+- Return the generated `_Patched.apk` to the user.
+- Optionally restrict the bot to specific Telegram user IDs.
 
-Use the bot only with APKs you own or are authorized to test or modify.
+Use this only with APKs you own or are authorized to test or modify.
 
-## Termux setup
+## Installation
 
-Clone your fork and enter it:
-
-```bash
-git clone https://github.com/khan23153/Apkpatching.git
-cd Apkpatching
-git checkout telegram-bot
-```
-
-Install/update the Termux packages used by the original patcher:
+Install ApkPatcherX with the optional Telegram dependency:
 
 ```bash
-pkg update -y
-pkg install -y python openjdk-17 aapt2 git
+python -m pip install -e '.[telegram]'
 ```
 
-Install this repository and its Python dependencies:
+The original ApkPatcher dependencies (Java, aapt2 and the existing tool files) are still required.
 
-```bash
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
+## Configuration
 
-Set the BotFather token for the current shell:
+Set a BotFather token:
 
 ```bash
 export TELEGRAM_BOT_TOKEN='YOUR_BOTFATHER_TOKEN'
 ```
 
-Optional: make the bot private by allowing only your Telegram numeric user ID:
+Optional runtime settings:
 
 ```bash
+# Maximum accepted APK size in MB (default 20)
+export APKPATCHER_MAX_APK_MB=20
+
+# Maximum runtime for one patch job in seconds (default 1800)
+export APKPATCHER_JOB_TIMEOUT=1800
+
+# Number of concurrent patch workers (default 1)
+export APKPATCHER_WORKERS=1
+
+# Comma-separated Telegram numeric user IDs. Empty means public bot.
 export APKPATCHER_ALLOWED_USERS='123456789'
-```
-
-Run it:
-
-```bash
-python telegram_bot.py
-```
-
-Then open the bot in Telegram, send `/start`, and upload an APK as a **document**.
-
-## Keep it running in Termux
-
-A simple `tmux` setup:
-
-```bash
-pkg install -y tmux
-tmux new -s apkbot
-```
-
-Inside the tmux session:
-
-```bash
-cd ~/Apkpatching
-export TELEGRAM_BOT_TOKEN='YOUR_BOTFATHER_TOKEN'
-python telegram_bot.py
-```
-
-Detach with `Ctrl+b`, then `d`. Re-open later with:
-
-```bash
-tmux attach -t apkbot
-```
-
-## Environment options
-
-```bash
-# Required
-TELEGRAM_BOT_TOKEN=...
-
-# Maximum uploaded APK accepted by this wrapper (default 20 MB)
-APKPATCHER_MAX_APK_MB=20
-
-# Maximum patch job runtime in seconds (default 30 minutes)
-APKPATCHER_JOB_TIMEOUT=1800
-
-# Keep at 1 for the safest operation with the upstream CLI.
-APKPATCHER_WORKERS=1
-
-# Comma-separated Telegram numeric user IDs. Empty = public bot.
-APKPATCHER_ALLOWED_USERS=
 
 # Optional job directory
-APKPATCHER_BOT_WORKDIR=/data/data/com.termux/files/home/apkpatcher-bot-jobs
+export APKPATCHER_BOT_WORKDIR="$HOME/apkpatcher-bot-jobs"
 ```
+
+Do not commit your BotFather token to GitHub.
+
+## Run
+
+```bash
+python telegram_bot.py
+```
+
+Then send `/start` to the bot and upload an APK as a Telegram document.
 
 ## Commands
 
@@ -109,10 +66,9 @@ APKPATCHER_BOT_WORKDIR=/data/data/com.termux/files/home/apkpatcher-bot-jobs
 - `/help` — show instructions
 - `/reset` — clear the current APK session
 
-## Notes
+## Design notes
 
-- The Telegram layer does not replace the patch engine; it invokes the existing `apkpatcher` command.
-- JAR/tool downloads and checks performed by the original ApkPatcherX code still apply.
-- Uploaded files receive a unique job prefix to prevent two Telegram users from sharing the same working filename.
-- Patch jobs are serialized by default (`APKPATCHER_WORKERS=1`) because the upstream CLI uses shared resources under the user's home/runtime paths.
-- Do not commit your BotFather token to GitHub. Keep it in an environment variable.
+- The Telegram layer invokes the existing `apkpatcher` command as a subprocess instead of duplicating patch logic.
+- Uploaded APKs use unique job paths so different users do not share the same working filename.
+- Jobs are serialized by default because the existing CLI uses shared runtime resources.
+- Telegram support is an optional dependency, so normal ApkPatcherX installations remain unchanged.
