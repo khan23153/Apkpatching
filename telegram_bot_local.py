@@ -39,10 +39,9 @@ except ImportError:
 async def receive_document_local(update, context) -> None:
     """Receive an APK through telegram-bot-api running with --local.
 
-    In local mode getFile returns a filesystem path. Calling PTB's
-    download_to_drive(custom_path=...) can make PTB construct an HTTP file URL
-    instead. Ask PTB for the local path without a custom destination, then copy
-    the APK into the per-user isolated patch work directory.
+    In --local mode getFile returns a filesystem path on the same host. Use
+    that path directly and copy the APK into the isolated patch workdir instead
+    of asking PTB to perform another HTTP file download.
     """
     user = update.effective_user
     msg = update.effective_message
@@ -87,11 +86,12 @@ async def receive_document_local(update, context) -> None:
     status = await msg.reply_text("⬇️ Loading APK from local Telegram storage…")
     try:
         tg_file = await context.bot.get_file(doc.file_id)
+        if not tg_file.file_path:
+            raise FileNotFoundError("Local Bot API did not return a file path")
 
-        # Important: no custom_path here. With a Bot API Server started using
-        # --local, PTB returns the existing local file path instead of making
-        # another HTTP request through /file/bot... .
-        local_path = Path(await tg_file.download_to_drive())
+        local_path = Path(tg_file.file_path)
+        if not local_path.is_absolute():
+            raise RuntimeError(f"Expected absolute local Bot API path, got: {local_path}")
         if not local_path.is_file():
             raise FileNotFoundError(f"Local Bot API file not found: {local_path}")
 
