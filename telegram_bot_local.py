@@ -12,12 +12,14 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 # Give the local-Bot-API launcher a practical large-file default while still
 # allowing operators to set a lower/higher application safety cap explicitly.
 os.environ.setdefault("APKPATCHER_MAX_APK_MB", "500")
 os.environ.setdefault("TELEGRAM_BOT_API_BASE_URL", "http://127.0.0.1:8081/bot")
 os.environ.setdefault("TELEGRAM_BOT_API_FILE_URL", "http://127.0.0.1:8081/file/bot")
+os.environ.setdefault("TELEGRAM_BOT_API_DATA_DIR", "/var/lib/telegram-bot-api")
 
 import telegram_bot as bot
 from telegram import Update
@@ -36,13 +38,40 @@ except ImportError:
     run_patch_job_live = None
 
 
-async def receive_document_local(update, context) -> None:
-    """Receive an APK through telegram-bot-api running with --local.
+def _extract_local_file_path(file_path: str) -> Path:
+    """Convert PTB's local-Bot-API file URL back to its filesystem path.
 
-    In --local mode getFile returns a filesystem path on the same host. Use
-    that path directly and copy the APK into the isolated patch workdir instead
-    of asking PTB to perform another HTTP file download.
+    PTB may prepend ``base_file_url + token`` even when telegram-bot-api is
+    running with ``--local``. The Local Bot API response itself contains an
+    absolute filesystem path, so strip only our known local file prefix and
+    validate that the result stays inside the configured Bot API data dir.
     """
+    raw = str(file_path)
+
+    if raw.startswith(("http://", "https://")):
+        parsed = urlsplit(raw)
+        url_path = unquote(parsed.path)
+        marker = f"/file/bot{bot.TOKEN}"
+        if not url_path.startswith(marker):
+            raise RuntimeError("Unexpected Local Bot API file URL format")
+        raw = url_path[len(marker):]
+
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        raise RuntimeError("Local Bot API did not provide an absolute filesystem path")
+
+    candidate = candidate.resolve(strict=False)
+    data_root = Path(os.environ["TELEGRAM_BOT_API_DATA_DIR"]).resolve(strict=False)
+    try:
+        candidate.relative_to(data_root)
+    except ValueError as exc:
+        raise RuntimeError("Local Bot API file path is outside the configured data directory") from exc
+
+    return candidate
+
+
+async def receive_document_local(update, context) -> None:
+    """Receive an APK through telegram-bot-api running with --local."""
     user = update.effective_user
     msg = update.effective_message
     doc = msg.document if msg else None
@@ -89,16 +118,16 @@ async def receive_document_local(update, context) -> None:
         if not tg_file.file_path:
             raise FileNotFoundError("Local Bot API did not return a file path")
 
-        local_path = Path(tg_file.file_path)
-        if not local_path.is_absolute():
-            raise RuntimeError(f"Expected absolute local Bot API path, got: {local_path}")
+        local_path = _extract_local_file_path(str(tg_file.file_path))
         if not local_path.is_file():
-            raise FileNotFoundError(f"Local Bot API file not found: {local_path}")
+            raise FileNotFoundError("Local Bot API file is not present on disk")
 
         await asyncio.to_thread(shutil.copy2, local_path, input_path)
     except (TelegramError, OSError, RuntimeError) as exc:
         shutil.rmtree(workdir, ignore_errors=True)
-        bot.LOG.exception("Local APK transfer failed")
+        # Do not log the full exception/path here: PTB file URLs can contain
+        # the bot token. Keep production logs free of credentials.
+        bot.LOG.error("Local APK transfer failed: %s", type(exc).__name__)
         await bot._safe_edit(
             status,
             f"❌ Download failed: <code>{type(exc).__name__}</code>",
