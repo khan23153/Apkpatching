@@ -8,6 +8,44 @@ F = FileCheck(); F.Set_Path();
 EX = f"{C.P}\n   |\n   ╰{C.CC}┈{C.OG}➢ {C.G}ApkPatcher {' '.join(M.sys.argv[1:])} {C.OG}"
 
 
+def _is_termux():
+    return bool(M.os.environ.get("TERMUX_VERSION")) or M.os.path.isdir("/data/data/com.termux/files/usr")
+
+
+def _ensure_radare2():
+    """Ensure the r2 executable required by r2pipe is available.
+
+    Termux keeps the upstream pkg-based install behavior. Normal Linux/VPS
+    environments never call the Termux package manager; native dependencies
+    must be installed once during deployment.
+    """
+    r2_path = M.shutil.which("r2")
+    if r2_path:
+        result = M.subprocess.run(
+            [r2_path, "-V"],
+            stdout=M.subprocess.PIPE,
+            stderr=M.subprocess.PIPE,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+
+    if _is_termux():
+        try:
+            print(f"\n{C.S} Installing {C.E} {C.OG}➸❥ {C.G}radare2...\n")
+            M.subprocess.check_call(["pkg", "install", "-y", "radare2"])
+            if M.shutil.which("r2"):
+                return
+        except (M.subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+    exit(
+        f"\n\n{C.ERROR} Radare2 (r2) is not installed or not available in PATH.  ✘\n"
+        f"\n{C.INFO} On Ubuntu/Debian VPS, install Radare2 once during deployment.\n"
+        f"\n{C.INFO} Verify installation with: {C.G}r2 -V\n"
+    )
+
+
 # ---------------- Scan APK ----------------
 def Scan_Apk(apk_path, isFlutter, isPairip):
 
@@ -38,7 +76,6 @@ def Scan_Apk(apk_path, isFlutter, isPairip):
 
         print(f"\n{C.S} Package Name {C.E} {C.OG}➸❥ {C.P}'{C.G}{Package_Name}{C.P}' {C.G} ✔")
 
-    
     # ---------------- Check Flutter / Pairip Protection ----------------
     isPairip_lib = isFlutter_lib = False
 
@@ -50,38 +87,9 @@ def Scan_Apk(apk_path, isFlutter, isPairip):
                 if item.filename.endswith('libflutter.so'):
                     isFlutter_lib = True
 
-    
     # ---------------- Check Flutter Protection ----------------
     if isFlutter_lib:
-        def check_java_installation():
-            try:
-                M.subprocess.run(['radare2', '-v'], capture_output=True, text=True)
-            except (M.subprocess.CalledProcessError, FileNotFoundError):
-                if M.os.name == 'posix':
-                    for pkg in ['radare2']:
-                        try:
-
-                            result = M.subprocess.run(['pkg', 'list-installed'], capture_output=True, text=True)
-
-                            if pkg not in result.stdout:
-                                print(f"\n{C.S} Installing {C.E} {C.OG}➸❥ {C.G}{pkg}...\n")
-                                M.subprocess.check_call(['pkg', 'install', '-y', pkg])
-
-                                M.os.system('cls' if M.os.name == 'nt' else 'clear')
-
-                        except (M.subprocess.CalledProcessError, Exception):
-                            exit(
-                                f"\n\n{C.ERROR} No Internet Connection.  ✘\n"
-                                f"\n{C.INFO} Internet Connection is Required to Installation {C.G} pkg install {pkg}\n"
-                            )
-                else:
-                    exit(
-                        f"\n\n{C.ERROR} Radare2 is not installed on Your System.  ✘\n"
-                        f"\n{C.INFO} Install Radare2 and Run Script Again in New CMD.\n"
-                        f"\n{C.INFO} Verify Radare2 Installation {C.G} radare2 -v"
-                )
-
-        check_java_installation()
+        _ensure_radare2()
 
         FP = f"\n\n{C.S} Flutter Protection {C.E} {C.OG}➸❥ {C.P}'{C.G}libflutter.so{C.P}' {C.G} ✔"
 
@@ -92,11 +100,8 @@ def Scan_Apk(apk_path, isFlutter, isPairip):
                 f"\n{C.INFO} If APK is Flutter, Then Use Additional Flag: {C.OG}-f"
                 f"{EX}-f {C.Y}-c certificate.cert\n"
             )
-
         else:
-            if isFlutter:
-                print(FP)
-
+            print(FP)
 
     # ---------------- Check Pairip Protection ----------------
     if isPairip_lib:
@@ -112,9 +117,7 @@ def Scan_Apk(apk_path, isFlutter, isPairip):
                 f"{EX}-p -x {C.Y}-c certificate.cert\n\n"
                 f"\n{C.INFO} Note Both Method Not Stable, May be APK Crash {C.P}( So Try Your Luck ) 😂\n"
             )
-
         else:
-            if isPairip:
-                print(PP)
+            print(PP)
 
     return Package_Name, isFlutter_lib, isPairip_lib
