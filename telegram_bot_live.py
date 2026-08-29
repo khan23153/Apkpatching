@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Run the ApkPatcher Telegram bot with detailed live patch output.
 
-This module reuses telegram_bot.py and replaces its patch-job renderer. On the
-VPS, Flutter jobs prefer the upstream APKEditor mode (-a), because modern
-Flutter APKs can spend a long time in APKTool and then fail during rebuild.
-APKTool compatibility failures in other jobs can still retry with APKEditor.
+This module reuses telegram_bot.py and replaces its patch-job renderer.
+The VPS uses the normal Linux APKTool first and automatically retries with the
+upstream APKEditor mode (-a) only when APKTool reports a compatibility failure.
 """
 
 from __future__ import annotations
@@ -187,22 +186,10 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
         await menu_message.reply_text(f"⚠️ {exc}")
         return
 
-    # Flutter APKs have already shown poor APKTool rebuild compatibility on
-    # this VPS. Start directly with the upstream APKEditor path instead of
-    # spending many minutes on a likely-to-fail APKTool attempt.
-    prefer_apkeditor = "flutter" in session.selected and "-a" not in command
-    if prefer_apkeditor:
-        command = [*command, "-a"]
-
     session.running = True
     events: deque[str] = deque(maxlen=LIVE_LINES)
     stats = {"smali": 0, "patterns": 0, "manifest": 0, "certificates": 0, "signed": 0}
-
-    if prefer_apkeditor:
-        events.append("⚙️ Flutter job: using APKEditor compatibility mode from start")
-        percent, stage = 5, "Starting APKEditor compatibility mode…"
-    else:
-        percent, stage = 0, "Waiting for patch worker…"
+    percent, stage = 0, "Waiting for patch worker…"
 
     progress = await menu_message.reply_text(
         _render(session, percent, stage, events, stats), parse_mode=ParseMode.HTML
@@ -308,7 +295,7 @@ async def run_patch_job_live(user_id: int, menu_message, context) -> None:
     try:
         async with bot.PATCH_SEMAPHORE:
             # Clean stale output from an interrupted/failed previous attempt of
-            # this same job before starting the selected engine.
+            # this same job before starting with the normal Linux APKTool path.
             await asyncio.to_thread(_cleanup_retry_artifacts, session)
             returncode = await run_attempt(command)
 
