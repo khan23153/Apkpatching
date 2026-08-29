@@ -79,10 +79,9 @@ def find_offset(r2, patterns, is_iA=False):
                 print(f"\n{C.X}{C.C} ssl_verify_peer_cert found at: {C.PN}{search_result}\n", flush=True)
 
                 if not search_fcn:
-                    # The byte signatures in this module start at the target
-                    # function prologue. If basic analysis did not register the
-                    # function, define only this matched function instead of
-                    # performing an expensive whole-library call analysis.
+                    # The byte signatures start at the target function prologue.
+                    # Define only the matched function instead of analyzing the
+                    # complete libflutter.so image.
                     search_fcn = search_result
                     r2.cmd(f"af @{search_fcn}")
 
@@ -146,8 +145,6 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
     else:
         exit(f"\n{C.ERROR} libflutter.so not found in any of the specified architectures {architectures}\n")
 
-        M.shutil.rmtree(decompile_dir)
-
     import r2pipe
 
     if r2pipe.in_r2():
@@ -157,16 +154,11 @@ def Patch_Flutter_SSL(decompile_dir, isAPKEditor):
     else:
         r2 = r2pipe.open(lib_so_path, flags=["-w", "-e", "log.quiet=true"])
 
-    print(f"\n{C.X}{C.G} Flutter native analysis: basic function analysis...\n", flush=True)
-
-    # `aac` performs whole-library call analysis and can keep a single CPU core
-    # busy for many minutes on large stripped libflutter.so files. The patcher
-    # only needs enough function metadata to associate a matched prologue with
-    # a function, so basic `aa` analysis is sufficient; find_offset() defines
-    # the matched function directly if it is not already present.
-    r2.cmd("aa")
-
-    print(f"\n{C.X}{C.G} Searching for Flutter SSL offset...\n", flush=True)
+    # No `aa`/`aac` here. Whole-library analysis is unnecessary for this patch
+    # and can burn one CPU core for many minutes on large stripped Flutter SOs.
+    # The known byte signatures can be searched directly; find_offset() defines
+    # only the matched function when function metadata is absent.
+    print(f"\n{C.X}{C.G} Flutter patch: scanning native signatures directly...\n", flush=True)
 
     result = find_offset(r2, patterns, is_iA)
 
