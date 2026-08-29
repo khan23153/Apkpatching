@@ -14,7 +14,7 @@ description = "Smali Patcher ( Bypass 𒁍 SSL & Flutter SSL, VPN, USB Debugging
 license = { text = "MIT" }
 readme = "README.md"
 
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 
 dependencies = [
   "requests",
@@ -55,8 +55,8 @@ package-data = { ApkPatcher = [
 
 [project.urls]
 Homepage = "https://github.com/TechnoIndian/ApkPatcher"
-Repository = "https://github.com/TechnoIndian/ApkPatcher.git"
-Issues = "https://github.com/TechnoIndian/ApkPatcher/issues"
+Repository = "https://github.com/khan23153/Apkpatching.git"
+Issues = "https://github.com/khan23153/Apkpatching/issues"
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
